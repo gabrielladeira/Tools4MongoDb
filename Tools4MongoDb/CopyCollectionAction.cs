@@ -1,9 +1,9 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using MongoDB.Bson;
 using MongoDB.Driver;
-using PowerArgs;
 
 namespace Tools4MongoDb
 {
@@ -40,40 +40,9 @@ namespace Tools4MongoDb
             Console.WriteLine();
             Console.Write("Founded {0:##,###} documents", sourceCollectionCount);
 
-            var maxDocuments = sourceCollectionCount;
-
-            long skipDocuments = 1;
-            if (args.SamplingPercentualDocuments.HasValue)
-            {
-                maxDocuments = (long)Math.Ceiling(sourceCollectionCount * args.SamplingPercentualDocuments.Value);
-                skipDocuments = sourceCollectionCount / maxDocuments;
-                Console.WriteLine();
-                Console.Write(
-                    "Sampling to 1 by {0} documents = {1:p} = {2}",
-                    skipDocuments,
-                    args.SamplingPercentualDocuments.Value,
-                    maxDocuments);
-                Console.WriteLine();
-            }
-            else if (args.SamplingMaxDocuments.HasValue)
-            {
-                maxDocuments = args.SamplingMaxDocuments.Value;
-                skipDocuments = sourceCollectionCount / maxDocuments;
-                Console.WriteLine();
-                Console.Write(
-                    "Sampling to 1 by {0} documents = {1:##,###} documents",
-                    skipDocuments,
-                    args.SamplingMaxDocuments.Value);
-                Console.WriteLine();
-            }
-
-            if (args.MaxDocuments.HasValue &&
-                maxDocuments > args.MaxDocuments.Value)
-            {
-                Console.WriteLine();
-                Console.Write("Limiting to {0:##,###} documents", args.MaxDocuments.Value);
-                maxDocuments = args.MaxDocuments.Value;
-            }
+            long maxDocuments;
+            long skipDocuments;
+            CalcSkipAndMaxDocuments(args, sourceCollectionCount, out maxDocuments, out skipDocuments);
 
             Console.WriteLine();
             Console.WriteLine();
@@ -84,6 +53,25 @@ namespace Tools4MongoDb
             var cursor = sourceCollection.FindAll();
             cursor.SetFlags(QueryFlags.NoCursorTimeout);
 
+            var destinyCollectionCount = CopyDocuments(args, cursor, skipDocuments, maxDocuments, destinyCollection);
+
+            stopwatch.Stop();
+
+            Console.WriteLine();
+            Console.WriteLine(
+                "Copyed {0} documents in {1} = {2}",
+                destinyCollectionCount,
+                stopwatch.Elapsed,
+                new TimeSpan(stopwatch.ElapsedTicks / destinyCollectionCount));
+        }
+
+        private static int CopyDocuments(
+            CopyCollectionArgs args,
+            IEnumerable<BsonDocument> cursor,
+            long skipDocuments,
+            long maxDocuments,
+            MongoCollection<BsonDocument> destinyCollection)
+        {
             var counter = -1;
             var breakLine = false;
             var destinyCollectionCount = -1;
@@ -113,7 +101,8 @@ namespace Tools4MongoDb
                         breakLine = false;
                     }
 
-                    Console.WriteLine("{0:g} -> {1:##,##0}/{2:##,##0} = {3:p}", DateTime.Now, destinyCollectionCount, maxDocuments, percentual);
+                    Console.WriteLine("{0:g} -> {1:##,##0}/{2:##,##0} = {3:p}", DateTime.Now, destinyCollectionCount,
+                        maxDocuments, percentual);
                     lastPrintedPercentual = percentual;
                 }
 
@@ -153,15 +142,45 @@ namespace Tools4MongoDb
                     break;
                 }
             }
+            return destinyCollectionCount;
+        }
 
-            stopwatch.Stop();
+        private static void CalcSkipAndMaxDocuments(CopyCollectionArgs args, long sourceCollectionCount, out long maxDocuments, out long skipDocuments)
+        {
+            maxDocuments = sourceCollectionCount;
+            skipDocuments = 1;
 
-            Console.WriteLine();
-            Console.WriteLine(
-                "Copyed {0} documents in {1} = {2}",
-                destinyCollectionCount,
-                stopwatch.Elapsed,
-                new TimeSpan(stopwatch.ElapsedTicks / destinyCollectionCount));
+            if (args.SamplingPercentualDocuments.HasValue)
+            {
+                maxDocuments = (long)Math.Ceiling(sourceCollectionCount * args.SamplingPercentualDocuments.Value);
+                skipDocuments = sourceCollectionCount / maxDocuments;
+                Console.WriteLine();
+                Console.Write(
+                    "Sampling to 1 by {0} documents = {1:p} = {2}",
+                    skipDocuments,
+                    args.SamplingPercentualDocuments.Value,
+                    maxDocuments);
+                Console.WriteLine();
+            }
+            else if (args.SamplingMaxDocuments.HasValue)
+            {
+                maxDocuments = args.SamplingMaxDocuments.Value;
+                skipDocuments = sourceCollectionCount / maxDocuments;
+                Console.WriteLine();
+                Console.Write(
+                    "Sampling to 1 by {0} documents = {1:##,###} documents",
+                    skipDocuments,
+                    args.SamplingMaxDocuments.Value);
+                Console.WriteLine();
+            }
+
+            if (args.MaxDocuments.HasValue &&
+                maxDocuments > args.MaxDocuments.Value)
+            {
+                Console.WriteLine();
+                Console.Write("Limiting to {0:##,###} documents", args.MaxDocuments.Value);
+                maxDocuments = args.MaxDocuments.Value;
+            }
         }
     }
 }

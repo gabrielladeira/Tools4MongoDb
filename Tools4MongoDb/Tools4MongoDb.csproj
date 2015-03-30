@@ -51,7 +51,6 @@
     <Compile Include="CopyCollectionArgs.cs" />
     <Compile Include="DuplicateKey.cs" />
     <Compile Include="MongoHelper.cs" />
-    <Compile Include="ProgramActions.cs" />
     <Compile Include="Program.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>
