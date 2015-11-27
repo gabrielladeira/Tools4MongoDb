@@ -48,5 +48,15 @@ namespace Tools4MongoDb
         [ArgDefaultValue(DuplicateKey.Skip)]
         [ArgDescription("Handle when a duplicate key exception was throw")]
         public DuplicateKey OnDuplicateKey { get; set; }
+        
+
+        [ArgDescription("Query to apply a filter through the Documents")]
+        public string Query { get; set; }
+
+        [ArgDescription("File with query to apply a filter through the Documents")]
+        public string QueryFile { get; set; }
+
+        [ArgDescription("Number of Documents for insert batch")]
+        public int? BatchSize { get; set; }
     }
 }

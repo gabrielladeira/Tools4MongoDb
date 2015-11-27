@@ -1,9 +1,12 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using MongoDB.Bson;
+using MongoDB.Bson.Serialization;
 using MongoDB.Driver;
+using MongoDB.Driver.Wrappers;
 
 namespace Tools4MongoDb
 {
@@ -35,7 +38,35 @@ namespace Tools4MongoDb
                 destinyCollection.RemoveAll();
             }
 
-            var sourceCollectionCount = sourceCollection.Count();
+            string query = null;
+            if (!string.IsNullOrWhiteSpace(args.Query))
+            {
+                Console.WriteLine();
+                Console.Write("Query Applied: {0}", args.Query);
+                query = args.Query;
+            }
+
+
+            if (!string.IsNullOrWhiteSpace(args.QueryFile))
+            {
+                Console.WriteLine();
+                Console.Write("Query Applied: {0}", args.QueryFile);
+                query = File.ReadAllText(args.QueryFile); ;
+            }
+
+
+            if (args.BatchSize.HasValue)
+            {
+                Console.WriteLine();
+                Console.Write("Batch Size: {0}", args.BatchSize.Value);
+            }
+
+            var stopwatch = new Stopwatch();
+            stopwatch.Start();
+
+            long sourceCollectionCount;
+            var cursor = GetCursor(sourceCollection, query, out sourceCollectionCount);
+
             Console.WriteLine();
             Console.WriteLine();
             Console.Write("Founded {0:##,###} documents", sourceCollectionCount);
@@ -47,12 +78,6 @@ namespace Tools4MongoDb
             Console.WriteLine();
             Console.WriteLine();
 
-            var stopwatch = new Stopwatch();
-            stopwatch.Start();
-
-            var cursor = sourceCollection.FindAll();
-            cursor.SetFlags(QueryFlags.NoCursorTimeout);
-
             var destinyCollectionCount = CopyDocuments(args, cursor, skipDocuments, maxDocuments, destinyCollection);
 
             stopwatch.Stop();
@@ -63,6 +88,8 @@ namespace Tools4MongoDb
                 destinyCollectionCount,
                 stopwatch.Elapsed,
                 new TimeSpan(stopwatch.ElapsedTicks / destinyCollectionCount));
+
+            Console.ReadKey();
         }
 
         private static int CopyDocuments(
@@ -74,8 +101,13 @@ namespace Tools4MongoDb
         {
             var counter = -1;
             var breakLine = false;
-            var destinyCollectionCount = -1;
+            var destinyCollectionCount = 0;
             double lastPrintedPercentual = -1;
+            var batch = new List<BsonDocument>();
+            var batchSize = args.BatchSize ?? 1;
+
+            Console.WriteLine("{0:g} -> {1:##,##0}/{2:##,##0} = {3:p}", DateTime.Now, 0, maxDocuments, 0);
+
             foreach (var item in cursor.AsEnumerable())
             {
                 counter += 1;
@@ -92,6 +124,17 @@ namespace Tools4MongoDb
 
                 destinyCollectionCount += 1;
 
+                batch.Add(item);
+
+                if (destinyCollectionCount < maxDocuments &&
+                    batch.Count < batchSize)
+                {
+                    continue;
+                }
+
+                InsertBatch(destinyCollection, batch, args);
+                batch = new List<BsonDocument>();
+
                 var percentual = (double)destinyCollectionCount / maxDocuments;
                 if (percentual.ToString("p") != lastPrintedPercentual.ToString("p"))
                 {
@@ -106,46 +149,17 @@ namespace Tools4MongoDb
                     lastPrintedPercentual = percentual;
                 }
 
-                try
-                {
-                    destinyCollection.Insert(item);
-                }
-                catch (MongoDuplicateKeyException)
-                {
-                    switch (args.OnDuplicateKey)
-                    {
-                        case DuplicateKey.Skip:
-                            Console.WriteLine("\tSkiped because already exists ({0})", item["_id"]);
-                            break;
-
-                        case DuplicateKey.Abort:
-                            Console.WriteLine("\tAborting because duplicateKey ({0})", item["_id"]);
-                            throw;
-
-                        case DuplicateKey.GenerateNewKey:
-                            Console.WriteLine("\tGenerate new key ({0})", item["_id"]);
-                            item["_id"] = BsonNull.Value;
-                            try
-                            {
-                                destinyCollection.Insert(item);
-                            }
-                            catch (MongoDuplicateKeyException)
-                            {
-                                Console.WriteLine("\t\tSkiped on second try ({0})", item["_id"]);
-                            }
-                            break;
-                    }
-                }
-
                 if (destinyCollectionCount >= maxDocuments)
                 {
                     break;
                 }
             }
+
             return destinyCollectionCount;
         }
 
-        private static void CalcSkipAndMaxDocuments(CopyCollectionArgs args, long sourceCollectionCount, out long maxDocuments, out long skipDocuments)
+        private static void CalcSkipAndMaxDocuments(CopyCollectionArgs args, long sourceCollectionCount,
+            out long maxDocuments, out long skipDocuments)
         {
             maxDocuments = sourceCollectionCount;
             skipDocuments = 1;
@@ -180,6 +194,62 @@ namespace Tools4MongoDb
                 Console.WriteLine();
                 Console.Write("Limiting to {0:##,###} documents", args.MaxDocuments.Value);
                 maxDocuments = args.MaxDocuments.Value;
+            }
+        }
+
+        private static IEnumerable<BsonDocument> GetCursor(MongoCollection<BsonDocument> sourceCollection,
+            string query, out long sourceCollectionCount)
+        {
+            if (string.IsNullOrWhiteSpace(query))
+            {
+                sourceCollectionCount = sourceCollection.Count();
+                return sourceCollection.FindAll().SetFlags(QueryFlags.NoCursorTimeout);
+            }
+
+            var doc = BsonSerializer.Deserialize<BsonDocument>(query);
+
+            var queryWrap = new QueryWrapper(doc);
+
+            var cursor = sourceCollection.Find(queryWrap).SetFlags(QueryFlags.NoCursorTimeout);
+
+            sourceCollectionCount = cursor.Count();
+
+            return cursor;
+        }
+
+        private static void InsertBatch(MongoCollection<BsonDocument> destinyCollection, IEnumerable<BsonDocument> batch, CopyCollectionArgs args)
+        {
+            Console.WriteLine();
+
+            try
+            {
+                destinyCollection.InsertBatch(batch, new MongoInsertOptions()
+                {
+                    Flags = args.OnDuplicateKey == DuplicateKey.Skip ? InsertFlags.ContinueOnError : InsertFlags.None
+                });
+            }
+            catch (MongoDuplicateKeyException ex)
+            {
+                switch (args.OnDuplicateKey)
+                {
+                    case DuplicateKey.Skip:
+                        Console.WriteLine("\tSkiped because already exists ({0})", ex.Message);
+                        break;
+                    case DuplicateKey.Abort:
+                        Console.WriteLine("\tAborting because duplicateKey ({0})", ex.Message);
+                        throw;
+                    case DuplicateKey.GenerateNewKey:
+                        //Console.WriteLine("\tGenerate new key ({0})", item["_id"]);
+                        try
+                        {
+
+                        }
+                        catch (MongoDuplicateKeyException)
+                        {
+                            //Console.WriteLine("\t\tSkiped on second try ({0})", item["_id"]);
+                        }
+                        break;
+                }
             }
         }
     }
